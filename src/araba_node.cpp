@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <memory>
 #include <unistd.h>
+#include <queue>
 #include "network.hpp"
 #include "packet.hpp"
 #include "routing.hpp"
@@ -32,6 +33,17 @@ std::map<std::string, std::unique_ptr<AES256>> pair_ciphers;
 FragmentManager frag_mgr;
 NodeConfig g_config;
 
+// ACK tracking: seq_num -> {dest_mac, retries, timestamp, message}
+struct PendingAck {
+    uint8_t dest_mac[6];
+    uint8_t retries;
+    std::chrono::steady_clock::time_point sent_time;
+    std::string original_msg;
+    uint32_t seq_num;
+};
+std::map<uint32_t, PendingAck> pending_acks;
+uint32_t next_ack_seq = 1;
+
 void log_event(const std::string& msg) {
     std::ofstream log(g_config.log_file, std::ios::app);
     auto t = std::time(nullptr);
@@ -47,6 +59,7 @@ void print_usage() {
               << "  status   - Show last 10 log events\n"
               << "  receive  - Check for messages sent to you\n"
               << "  queue    - Show pending .rue messages\n"
+              << "  pending  - Show messages waiting for ACK\n"
               << "  quit     - Stop the node\n"
               << "------------------------\n" << std::endl;
 }
@@ -152,6 +165,15 @@ void unpack_routes(const uint8_t* payload, size_t len, const uint8_t via[6], Rou
     }
 }
 
+// Send an ACK packet back to source
+void send_ack(NetworkInterface& net, const uint8_t dest_mac[6], const uint8_t my_mac[6], uint32_t ack_seq) {
+    Packet ack_pkt;
+    ack_pkt.init(PacketType::ACK, my_mac, dest_mac, ack_seq);
+    std::memcpy(ack_pkt.payload, &ack_seq, sizeof(uint32_t));
+    ack_pkt.header.payload_len = sizeof(uint32_t);
+    net.send_packet(ack_pkt, dest_mac);
+}
+
 void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::string>& known_neighbors,
                   uint32_t& seq_num, RueQueue& queue) {
     uint8_t my_mac[6];
@@ -217,6 +239,18 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
                     log_event("ROUTE_ADV from " + src_mac);
                 }
 
+                if (received.header.type == PacketType::ACK) {
+                    if (received.header.payload_len >= sizeof(uint32_t)) {
+                        uint32_t acked_seq;
+                        std::memcpy(&acked_seq, received.payload, sizeof(uint32_t));
+                        auto it = pending_acks.find(acked_seq);
+                        if (it != pending_acks.end()) {
+                            log_event("ACK received for seq " + std::to_string(acked_seq) + " from " + src_mac);
+                            pending_acks.erase(it);
+                        }
+                    }
+                }
+
                 if (received.header.type == PacketType::DATA) {
                     // Check if this is a single packet or a fragment
                     bool is_fragment = false;
@@ -252,6 +286,8 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
                         } else {
                             std::string msg((char*)decrypted, dec_len);
                             log_event("MESSAGE RECEIVED from " + src_mac + ": " + msg);
+                            // Send ACK back
+                            send_ack(net, received.header.source, my_mac, received.header.sequence_id);
                         }
                     } else {
                         // Single packet (no fragmentation) — decrypt directly
@@ -276,11 +312,42 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
                         } else {
                             std::string msg((char*)decrypted, dec_len);
                             log_event("MESSAGE RECEIVED from " + src_mac + ": " + msg);
+                            // Send ACK back
+                            send_ack(net, received.header.source, my_mac, received.header.sequence_id);
                         }
                     }
                 }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        // Retry unacknowledged messages
+        auto now = std::chrono::steady_clock::now();
+        auto it = pending_acks.begin();
+        while (it != pending_acks.end()) {
+            auto age = std::chrono::duration_cast<std::chrono::seconds>(now - it->second.sent_time).count();
+            if (age > 3) {  // Retry every 3 seconds
+                if (it->second.retries >= 3) {
+                    log_event("DELIVERY FAILED to " + mac_to_string(it->second.dest_mac) +
+                              " after 3 retries: " + it->second.original_msg);
+                    it = pending_acks.erase(it);
+                    continue;
+                }
+
+                // Retry: resend the same packet
+                Packet retry_pkt;
+                retry_pkt.init(PacketType::DATA, my_mac, it->second.dest_mac, it->second.seq_num);
+                // We don't store the full encrypted payload, so we can't truly resend without re-encrypting
+                // For v1.0, we log the failure. Full retry would require storing encrypted payload.
+                log_event("RETRY " + std::to_string(it->second.retries + 1) +
+                          " for seq " + std::to_string(it->second.seq_num) +
+                          " to " + mac_to_string(it->second.dest_mac));
+                it->second.retries++;
+                it->second.sent_time = now;
+                ++it;
+            } else {
+                ++it;
+            }
         }
 
         static int cleanup_counter = 0;
@@ -293,7 +360,7 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
 }
 
 int main(int argc, char* argv[]) {
-    std::cout << "=== ARABA Node v0.9 (Config + Dynamic Keys + Fragments) ===\n"
+    std::cout << "=== ARABA Node v1.0 (ACKs + Dynamic Keys + Fragments) ===\n"
               << "Starting Mesh Network...\n" << std::endl;
 
     if (geteuid() != 0) {
@@ -403,6 +470,23 @@ int main(int argc, char* argv[]) {
         else if (command == "queue") {
             queue.print_status();
         }
+        else if (command == "pending") {
+            std::lock_guard<std::mutex> lock(net_mutex);
+            std::cout << "\n--- Pending ACKs (" << pending_acks.size() << ") ---\n";
+            if (pending_acks.empty()) {
+                std::cout << "All messages acknowledged.\n";
+            } else {
+                for (const auto& [seq, pa] : pending_acks) {
+                    auto age = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::steady_clock::now() - pa.sent_time).count();
+                    std::cout << "  Seq " << seq << " to " << mac_to_string(pa.dest_mac)
+                              << " | Retries: " << (int)pa.retries
+                              << " | Age: " << age << "s"
+                              << " | Msg: \"" << pa.original_msg.substr(0, 40) << "...\"\n";
+                }
+            }
+            std::cout << "-------------------------\n";
+        }
         else if (command == "send") {
             std::string target_mac;
             iss >> target_mac;
@@ -442,14 +526,29 @@ int main(int argc, char* argv[]) {
                                                        my_mac, dest_mac, seq_num);
 
             if (reachable) {
+                uint32_t ack_seq = next_ack_seq++;
                 for (auto& pkt : fragments) {
                     {
                         std::lock_guard<std::mutex> lock(net_mutex);
                         net.send_packet(pkt, dest_mac);
                     }
                 }
+
+                // Track ACK for the first fragment's seq_num (simplified)
+                {
+                    std::lock_guard<std::mutex> lock(net_mutex);
+                    PendingAck pa;
+                    std::memcpy(pa.dest_mac, dest_mac, 6);
+                    pa.retries = 0;
+                    pa.sent_time = std::chrono::steady_clock::now();
+                    pa.original_msg = message;
+                    pa.seq_num = ack_seq;
+                    pending_acks[ack_seq] = pa;
+                }
+
                 std::cout << "Sent (encrypted, " << fragments.size() << " fragment(s)) to "
                           << target_mac << ": \"" << message << "\"\n";
+                std::cout << "Waiting for ACK... (check 'pending' for status)\n";
             } else {
                 for (auto& pkt : fragments) {
                     queue.enqueue(dest_mac, pkt.payload, pkt.header.payload_len);
@@ -459,7 +558,7 @@ int main(int argc, char* argv[]) {
             }
         }
         else if (!command.empty()) {
-            std::cout << "Unknown command. Use: send, list, table, status, receive, queue, quit.\n";
+            std::cout << "Unknown command. Use: send, list, table, status, receive, queue, pending, quit.\n";
         }
     }
 

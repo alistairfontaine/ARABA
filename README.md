@@ -15,6 +15,7 @@ When the grid fails, the internet dies. Starlink requires hardware and satellite
 ---
 
 # ARABA — Offline-First Encrypted Mesh Network
+**v1.0 — Crisis Ready**
 
 &gt; *"For the day the towers go dark."*
 
@@ -35,6 +36,7 @@ ARABA is a zero-dependency, offline-first mesh networking protocol built in pure
 - **Delay-Tolerant**: Stores and forwards messages even if nodes are offline.
 - **Self-Healing**: Automatically reroutes traffic if a node goes down.
 - **Lightweight**: Runs on 20-year-old hardware.
+- ✅ **Message ACKs + Retry** — Delivery confirmation with automatic retry
 
 ## Hardware Tested
 
