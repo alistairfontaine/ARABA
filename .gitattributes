@@ -1,0 +1,14 @@
+# Set the default behavior, in case people don't have core.autocrlf set
+* text=auto
+
+# Ensure C++ files always use Unix line endings (LF)
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.h text eol=lf
+*.c text eol=lf
+*.hxx text eol=lf
+*.cc text eol=lf
+
+# Ensure scripts use Unix line endings
+*.sh text eol=lf
+*.py text eol=lf

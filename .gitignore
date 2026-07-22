@@ -1,0 +1,29 @@
+# Compiled executables
+*.o
+*.out
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build directories
+build/
+bin/
+obj/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Debug files
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# OS files
+.DS_Store
+Thumbs.db
