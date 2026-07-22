@@ -255,4 +255,30 @@ void generate_iv(uint8_t iv[AES_BLOCK_SIZE]) {
     }
 }
 
+void derive_pair_key(
+    const uint8_t mac_a[6],
+    const uint8_t mac_b[6],
+    const uint8_t base_key[AES_KEY_SIZE],
+    uint8_t out_key[AES_KEY_SIZE]
+) {
+    const uint8_t* first = mac_a;
+    const uint8_t* second = mac_b;
+
+    int cmp = std::memcmp(mac_a, mac_b, 6);
+    if (cmp > 0) {
+        first = mac_b;
+        second = mac_a;
+    }
+
+    std::memcpy(out_key, base_key, AES_KEY_SIZE);
+    for (int i = 0; i < 6; i++) {
+        out_key[i] ^= first[i];
+        out_key[i + 16] ^= second[i];
+    }
+
+    for (int i = 0; i < AES_KEY_SIZE; i++) {
+        out_key[i] = (out_key[i] * 17 + i) ^ 0xA5;
+    }
+}
+
 } // namespace araba

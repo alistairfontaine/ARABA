@@ -31,6 +31,8 @@ private:
 };
 
 void derive_key(const char* passphrase, uint8_t key[AES_KEY_SIZE]);
+void derive_pair_key(const uint8_t mac_a[6], const uint8_t mac_b[6],
+                     const uint8_t base_key[AES_KEY_SIZE], uint8_t out_key[AES_KEY_SIZE]);
 void generate_iv(uint8_t iv[AES_BLOCK_SIZE]);
 
 } // namespace araba

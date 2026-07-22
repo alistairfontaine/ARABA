@@ -50,6 +50,19 @@ bool NetworkInterface::open(const std::string& interface_name) {
     return true;
 }
 
+bool NetworkInterface::open_auto() {
+    // Try common wireless interface names
+    const char* common_interfaces[] = {"wlo1", "wlan0", "wlp2s0", "wlx", "eth0"};
+    for (const char* iface : common_interfaces) {
+        if (if_nametoindex(iface) != 0) {
+            std::cout << "[Network] Auto-detected interface: " << iface << "\n";
+            return open(iface);
+        }
+    }
+    std::cerr << "[Network] Could not auto-detect interface. Please specify manually.\n";
+    return false;
+}
+
 void NetworkInterface::close() {
     if (sock_fd != -1) {
         ::close(sock_fd);

@@ -12,20 +12,24 @@
 #include <mutex>
 #include <ctime>
 #include <iomanip>
+#include <memory>
+#include <unistd.h>
 #include "network.hpp"
 #include "packet.hpp"
 #include "routing.hpp"
 #include "persistence.hpp"
 #include "crypto.hpp"
+#include "fragment.hpp"
 
 using namespace araba;
 
 // Global state
 std::mutex net_mutex;
 bool running = true;
-AES256* global_aes = nullptr;
+uint8_t base_key[AES_KEY_SIZE];
+std::map<std::string, std::unique_ptr<AES256>> pair_ciphers;
+FragmentManager frag_mgr;
 
-// Logger to file instead of stdout
 void log_event(const std::string& msg) {
     std::ofstream log("araba.log", std::ios::app);
     auto t = std::time(nullptr);
@@ -45,7 +49,6 @@ void print_usage() {
               << "------------------------\n" << std::endl;
 }
 
-// Pad data to 16-byte boundary (PKCS#7 style)
 size_t pad_data(const uint8_t* input, size_t len, uint8_t* output, size_t max_out) {
     size_t padded_len = ((len + AES_BLOCK_SIZE) / AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
     if (padded_len > max_out) padded_len = max_out;
@@ -55,7 +58,6 @@ size_t pad_data(const uint8_t* input, size_t len, uint8_t* output, size_t max_ou
     return padded_len;
 }
 
-// Remove PKCS#7 padding
 size_t unpad_data(const uint8_t* input, size_t len, uint8_t* output, size_t max_out) {
     if (len == 0 || len % AES_BLOCK_SIZE != 0) return 0;
     uint8_t pad_byte = input[len - 1];
@@ -66,43 +68,56 @@ size_t unpad_data(const uint8_t* input, size_t len, uint8_t* output, size_t max_
     return out_len;
 }
 
-// Encrypt payload: IV(16) + ciphertext
-// Returns total encrypted length (IV + ciphertext), or 0 on error
-size_t encrypt_payload(const uint8_t* plaintext, size_t plain_len, uint8_t* out, size_t max_out) {
+AES256* get_pair_cipher(const uint8_t their_mac[6], const uint8_t my_mac[6]) {
+    std::string key = mac_to_string(their_mac);
+
+    std::lock_guard<std::mutex> lock(net_mutex);
+    auto it = pair_ciphers.find(key);
+    if (it != pair_ciphers.end()) {
+        return it->second.get();
+    }
+
+    uint8_t pair_key[AES_KEY_SIZE];
+    derive_pair_key(my_mac, their_mac, base_key, pair_key);
+
+    auto aes = std::make_unique<AES256>(pair_key);
+    AES256* ptr = aes.get();
+    pair_ciphers[key] = std::move(aes);
+    return ptr;
+}
+
+size_t encrypt_payload(const uint8_t* plaintext, size_t plain_len, uint8_t* out, size_t max_out,
+                       AES256* aes) {
     uint8_t iv[AES_BLOCK_SIZE];
     generate_iv(iv);
 
-    // Copy IV to output
     std::memcpy(out, iv, AES_BLOCK_SIZE);
 
-    // Pad and encrypt
-    uint8_t padded[512];
-    size_t padded_len = pad_data(plaintext, plain_len, padded, 512);
+    uint8_t padded[1024];
+    size_t padded_len = pad_data(plaintext, plain_len, padded, 1024);
     if (padded_len + AES_BLOCK_SIZE > max_out) return 0;
 
     std::memcpy(out + AES_BLOCK_SIZE, padded, padded_len);
-    global_aes->encrypt_cbc(out + AES_BLOCK_SIZE, padded_len, iv);
+    aes->encrypt_cbc(out + AES_BLOCK_SIZE, padded_len, iv);
 
     return AES_BLOCK_SIZE + padded_len;
 }
 
-// Decrypt payload: extract IV, decrypt, unpad
-// Returns decrypted length, or 0 on error
-size_t decrypt_payload(const uint8_t* encrypted, size_t enc_len, uint8_t* out, size_t max_out) {
+size_t decrypt_payload(const uint8_t* encrypted, size_t enc_len, uint8_t* out, size_t max_out,
+                       AES256* aes) {
     if (enc_len < AES_BLOCK_SIZE + AES_BLOCK_SIZE) return 0;
 
     uint8_t iv[AES_BLOCK_SIZE];
     std::memcpy(iv, encrypted, AES_BLOCK_SIZE);
 
     size_t cipher_len = enc_len - AES_BLOCK_SIZE;
-    uint8_t decrypted[512];
+    uint8_t decrypted[1024];
     std::memcpy(decrypted, encrypted + AES_BLOCK_SIZE, cipher_len);
-    global_aes->decrypt_cbc(decrypted, cipher_len, iv);
+    aes->decrypt_cbc(decrypted, cipher_len, iv);
 
     return unpad_data(decrypted, cipher_len, out, max_out);
 }
 
-// Pack routes into payload for ROUTE_ADV
 size_t pack_routes(const std::set<std::string>& neighbors, uint8_t* payload, size_t max_size) {
     size_t offset = 1;
     uint8_t count = 0;
@@ -120,7 +135,6 @@ size_t pack_routes(const std::set<std::string>& neighbors, uint8_t* payload, siz
     return offset;
 }
 
-// Unpack routes from payload and add to table
 void unpack_routes(const uint8_t* payload, size_t len, const uint8_t via[6], RoutingTable& table) {
     if (len < 1) return;
     uint8_t count = payload[0];
@@ -136,8 +150,8 @@ void unpack_routes(const uint8_t* payload, size_t len, const uint8_t via[6], Rou
     }
 }
 
-// Network Loop — SILENT background operation
-void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::string>& known_neighbors, uint32_t& seq_num, RueQueue& queue) {
+void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::string>& known_neighbors,
+                  uint32_t& seq_num, RueQueue& queue) {
     uint8_t my_mac[6];
     net.get_local_mac(my_mac);
     uint8_t broadcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
@@ -145,7 +159,6 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
     log_event("Network loop started on " + mac_to_string(my_mac));
 
     while (running) {
-        // 1. Broadcast Hello (plaintext — discovery doesn't need crypto)
         Packet hello_pkt;
         hello_pkt.init(PacketType::DISCOVERY, my_mac, broadcast, seq_num++);
         const char* msg = "ARABA Hello!";
@@ -153,7 +166,6 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
         hello_pkt.header.payload_len = std::strlen(msg);
         net.send_packet(hello_pkt, broadcast);
 
-        // 2. Listen for packets
         Packet received;
         for (int i = 0; i < 10; ++i) {
             if (!running) break;
@@ -164,14 +176,12 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
 
                 std::lock_guard<std::mutex> lock(net_mutex);
 
-                // Always add direct neighbor (1 hop)
                 if (known_neighbors.find(src_mac) == known_neighbors.end()) {
                     known_neighbors.insert(src_mac);
                     table.add_route(received.header.source, received.header.source, 1);
                     log_event("NEW NEIGHBOR: " + src_mac);
                 }
 
-                // Auto-deliver queued messages for this neighbor
                 uint8_t src_bytes[6];
                 string_to_mac(src_mac, src_bytes);
                 auto pending = queue.get_pending(src_bytes);
@@ -187,7 +197,6 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
                     }
                 }
 
-                // Handle DISCOVERY: Reply with ROUTE_ADV
                 if (received.header.type == PacketType::DISCOVERY) {
                     Packet adv_pkt;
                     adv_pkt.init(PacketType::ROUTE_ADV, my_mac, received.header.source, seq_num++);
@@ -200,24 +209,24 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
                     net.send_packet(adv_pkt, received.header.source);
                 }
 
-                // Handle ROUTE_ADV: Learn new routes
                 if (received.header.type == PacketType::ROUTE_ADV) {
                     unpack_routes(received.payload, received.header.payload_len, received.header.source, table);
                     log_event("ROUTE_ADV from " + src_mac);
                 }
 
-                // Handle DATA: Decrypt, then forward or receive
                 if (received.header.type == PacketType::DATA) {
-                    uint8_t decrypted[512];
-                    size_t dec_len = decrypt_payload(received.payload, received.header.payload_len, decrypted, 512);
+                    AES256* aes = get_pair_cipher(received.header.source, my_mac);
+
+                    uint8_t decrypted[1024];
+                    size_t dec_len = decrypt_payload(received.payload, received.header.payload_len,
+                                                     decrypted, 1024, aes);
 
                     if (dec_len == 0) {
-                        log_event("Failed to decrypt DATA from " + src_mac + " (wrong key or corrupted)");
+                        log_event("Failed to decrypt DATA from " + src_mac);
                         continue;
                     }
 
                     if (std::memcmp(received.header.dest, my_mac, 6) != 0) {
-                        // Forward — keep encrypted payload as-is
                         const RouteEntry* route = table.find_next_hop(received.header.dest);
                         if (route && received.header.ttl > 1) {
                             Packet fwd = received;
@@ -226,7 +235,6 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
                             log_event("FORWARDED DATA to " + mac_to_string(route->next_hop));
                         }
                     } else {
-                        // It's for us! Print decrypted message
                         std::string msg((char*)decrypted, dec_len);
                         log_event("MESSAGE RECEIVED from " + src_mac + ": " + msg);
                     }
@@ -234,12 +242,18 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+
+        static int cleanup_counter = 0;
+        if (++cleanup_counter >= 100) {
+            frag_mgr.cleanup_stale();
+            cleanup_counter = 0;
+        }
     }
     log_event("Network loop stopped.");
 }
 
-int main() {
-    std::cout << "=== ARABA Node v0.7 (Encrypted Mesh) ===\n"
+int main(int argc, char* argv[]) {
+    std::cout << "=== ARABA Node v0.8 (Dynamic Keys + Fragments) ===\n"
               << "Starting Mesh Network...\n" << std::endl;
 
     if (geteuid() != 0) {
@@ -247,17 +261,21 @@ int main() {
         return 1;
     }
 
-    // Initialize crypto
-    uint8_t key[AES_KEY_SIZE];
-    derive_key("ARABA_MESH_SECRET_2026", key);
-    global_aes = new AES256(key);
-    std::cout << "[Crypto] AES-256 initialized. Shared secret active.\n" << std::endl;
+    derive_key("ARABA_MESH_SECRET_2026", base_key);
+    std::cout << "[Crypto] Base key derived. Per-pair encryption active.\n" << std::endl;
 
     NetworkInterface net;
-    if (!net.open("wlo1")) {
-        std::cerr << "Failed to open wlo1.\n";
-        delete global_aes;
-        return 1;
+
+    if (argc > 1) {
+        if (!net.open(argv[1])) {
+            std::cerr << "Failed to open " << argv[1] << ".\n";
+            return 1;
+        }
+    } else {
+        if (!net.open_auto()) {
+            std::cerr << "Failed to auto-detect interface. Try: sudo ./araba_node wlo1\n";
+            return 1;
+        }
     }
 
     uint8_t my_mac[6];
@@ -269,7 +287,8 @@ int main() {
     uint32_t seq_num = 0;
     RueQueue queue("pending_messages.rue");
 
-    std::thread net_thread(network_loop, std::ref(net), std::ref(my_table), std::ref(known_neighbors), std::ref(seq_num), std::ref(queue));
+    std::thread net_thread(network_loop, std::ref(net), std::ref(my_table), std::ref(known_neighbors),
+                          std::ref(seq_num), std::ref(queue));
 
     print_usage();
 
@@ -348,7 +367,6 @@ int main() {
             uint8_t dest_mac[6];
             string_to_mac(target_mac, dest_mac);
 
-            // Check if target is reachable
             bool reachable = false;
             {
                 std::lock_guard<std::mutex> lock(net_mutex);
@@ -359,30 +377,34 @@ int main() {
                 }
             }
 
-            // Encrypt the message
-            uint8_t encrypted[512];
-            size_t enc_len = encrypt_payload((uint8_t*)message.c_str(), message.length(), encrypted, 512);
+            AES256* aes = get_pair_cipher(dest_mac, my_mac);
+
+            uint8_t encrypted[1024];
+            size_t enc_len = encrypt_payload((uint8_t*)message.c_str(), message.length(),
+                                             encrypted, 1024, aes);
             if (enc_len == 0) {
                 std::cout << "Error: Encryption failed.\n";
                 continue;
             }
 
-            Packet msg_pkt;
-            msg_pkt.init(PacketType::DATA, my_mac, dest_mac, seq_num++);
-            std::memcpy(msg_pkt.payload, encrypted, enc_len);
-            msg_pkt.header.payload_len = enc_len;
+            auto fragments = frag_mgr.fragment_message(encrypted, enc_len, PacketType::DATA,
+                                                       my_mac, dest_mac, seq_num);
 
             if (reachable) {
-                {
-                    std::lock_guard<std::mutex> lock(net_mutex);
-                    net.send_packet(msg_pkt, dest_mac);
+                for (auto& pkt : fragments) {
+                    {
+                        std::lock_guard<std::mutex> lock(net_mutex);
+                        net.send_packet(pkt, dest_mac);
+                    }
                 }
-                std::cout << "Sent (encrypted) to " << target_mac << ": \"" << message << "\"\n";
+                std::cout << "Sent (encrypted, " << fragments.size() << " fragment(s)) to "
+                          << target_mac << ": \"" << message << "\"\n";
             } else {
-                // Queue for later
-                queue.enqueue(dest_mac, msg_pkt.payload, msg_pkt.header.payload_len);
-                std::cout << "Target " << target_mac << " offline. Encrypted message saved to .rue queue.\n";
-                std::cout << "Will auto-deliver when neighbor returns.\n";
+                for (auto& pkt : fragments) {
+                    queue.enqueue(dest_mac, pkt.payload, pkt.header.payload_len);
+                }
+                std::cout << "Target " << target_mac << " offline. " << fragments.size()
+                          << " fragment(s) saved to .rue queue.\n";
             }
         }
         else if (!command.empty()) {
@@ -390,11 +412,9 @@ int main() {
         }
     }
 
-    // Cleanup
     running = false;
     if (net_thread.joinable()) net_thread.join();
     net.close();
-    delete global_aes;
     std::cout << "\nARABA Node stopped. Log saved to araba.log\n";
     return 0;
 }

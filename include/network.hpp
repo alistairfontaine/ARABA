@@ -20,8 +20,7 @@ public:
 
     // Initialize the socket on a specific interface (e.g., "wlan0", "eth0")
     bool open(const std::string& interface_name);
-
-    // Close the socket
+    bool open_auto();
     void close();
 
     // Send a packet to a specific destination MAC

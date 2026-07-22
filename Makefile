@@ -4,7 +4,7 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -I include
 TARGET = araba_node
-SRCS = src/araba_node.cpp src/network.cpp src/routing.cpp src/persistence.cpp src/crypto.cpp
+SRCS = src/araba_node.cpp src/network.cpp src/routing.cpp src/persistence.cpp src/crypto.cpp src/fragment.cpp
 OBJS = $(SRCS:.cpp=.o)
 
 .PHONY: all clean run test-crypto
