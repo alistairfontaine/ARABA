@@ -14,6 +14,7 @@
 #include "network.hpp"
 #include "packet.hpp"
 #include "routing.hpp"
+#include "persistence.hpp"
 
 using namespace araba;
 
@@ -36,20 +37,22 @@ void print_usage() {
               << "  table    - Show routing table\n"
               << "  status   - Show last 10 log events\n"
               << "  receive  - Check for messages sent to you\n"
+              << "  queue    - Show pending .rue messages\n"
               << "  quit     - Stop the node\n"
               << "------------------------\n" << std::endl;
 }
 
 // Pack routes into payload for ROUTE_ADV
-// Format: count(1 byte) + [mac(6) + hops(1)] * count
-size_t pack_routes(const std::map<std::string, RouteEntry>& routes, uint8_t* payload, size_t max_size) {
-    size_t offset = 1; // Reserve first byte for count
+size_t pack_routes(const std::set<std::string>& neighbors, uint8_t* payload, size_t max_size) {
+    size_t offset = 1;
     uint8_t count = 0;
 
-    for (const auto& pair : routes) {
+    for (const auto& n : neighbors) {
         if (offset + 7 > max_size) break;
-        std::memcpy(payload + offset, pair.second.destination, 6);
-        payload[offset + 6] = pair.second.hops;
+        uint8_t mac[6];
+        string_to_mac(n, mac);
+        std::memcpy(payload + offset, mac, 6);
+        payload[offset + 6] = 1;
         offset += 7;
         count++;
     }
@@ -68,14 +71,13 @@ void unpack_routes(const uint8_t* payload, size_t len, const uint8_t via[6], Rou
         uint8_t dest[6];
         std::memcpy(dest, payload + offset, 6);
         uint8_t hops = payload[offset + 6];
-        // Learn this route: destination is 'dest', next hop is the sender 'via'
         table.add_route(dest, via, hops + 1);
         offset += 7;
     }
 }
 
 // Network Loop — SILENT background operation
-void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::string>& known_neighbors, uint32_t& seq_num) {
+void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::string>& known_neighbors, uint32_t& seq_num, RueQueue& queue) {
     uint8_t my_mac[6];
     net.get_local_mac(my_mac);
     uint8_t broadcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
@@ -83,7 +85,7 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
     log_event("Network loop started on " + mac_to_string(my_mac));
 
     while (running) {
-        // 1. Broadcast Hello (DISCOVERY)
+        // 1. Broadcast Hello
         Packet hello_pkt;
         hello_pkt.init(PacketType::DISCOVERY, my_mac, broadcast, seq_num++);
         const char* msg = "ARABA Hello!";
@@ -109,30 +111,32 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
                     log_event("NEW NEIGHBOR: " + src_mac);
                 }
 
+                // Auto-deliver queued messages for this neighbor
+                uint8_t src_bytes[6];
+                string_to_mac(src_mac, src_bytes);
+                auto pending = queue.get_pending(src_bytes);
+                if (!pending.empty()) {
+                    log_event("Auto-delivering " + std::to_string(pending.size()) + " queued messages to " + src_mac);
+                    for (const auto& entry : pending) {
+                        Packet fwd;
+                        fwd.init(PacketType::DATA, my_mac, entry.dest_mac, seq_num++);
+                        std::memcpy(fwd.payload, entry.payload, entry.payload_len);
+                        fwd.header.payload_len = entry.payload_len;
+                        net.send_packet(fwd, entry.dest_mac);
+                        queue.remove_entry(entry);
+                    }
+                }
+
                 // Handle DISCOVERY: Reply with ROUTE_ADV
                 if (received.header.type == PacketType::DISCOVERY) {
                     Packet adv_pkt;
                     adv_pkt.init(PacketType::ROUTE_ADV, my_mac, received.header.source, seq_num++);
 
-                    // Pack our entire routing table
-                    // We need access to the internal table — let's use a workaround
-                    // For now, pack known_neighbors as 1-hop routes
                     uint8_t adv_payload[512];
-                    size_t offset = 1;
-                    uint8_t count = 0;
-                    for (const auto& n : known_neighbors) {
-                        if (offset + 7 > 500) break;
-                        uint8_t mac[6];
-                        string_to_mac(n, mac);
-                        std::memcpy(adv_payload + offset, mac, 6);
-                        adv_payload[offset + 6] = 1; // 1 hop
-                        offset += 7;
-                        count++;
-                    }
-                    adv_payload[0] = count;
+                    size_t adv_len = pack_routes(known_neighbors, adv_payload, 512);
 
-                    std::memcpy(adv_pkt.payload, adv_payload, offset);
-                    adv_pkt.header.payload_len = offset;
+                    std::memcpy(adv_pkt.payload, adv_payload, adv_len);
+                    adv_pkt.header.payload_len = adv_len;
                     net.send_packet(adv_pkt, received.header.source);
                 }
 
@@ -142,7 +146,7 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
                     log_event("ROUTE_ADV from " + src_mac);
                 }
 
-                // Forward DATA packets
+                // Handle DATA: Forward or receive
                 if (received.header.type == PacketType::DATA) {
                     if (std::memcmp(received.header.dest, my_mac, 6) != 0) {
                         const RouteEntry* route = table.find_next_hop(received.header.dest);
@@ -153,7 +157,6 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
                             log_event("FORWARDED DATA to " + mac_to_string(route->next_hop));
                         }
                     } else {
-                        // It's for us! Print it!
                         std::string msg((char*)received.payload, received.header.payload_len);
                         log_event("MESSAGE RECEIVED from " + src_mac + ": " + msg);
                     }
@@ -166,7 +169,7 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
 }
 
 int main() {
-    std::cout << "=== ARABA Node v0.5 (Multi-Hop Mesh) ===\n"
+    std::cout << "=== ARABA Node v0.6 (Store & Forward) ===\n"
               << "Starting Mesh Network...\n" << std::endl;
 
     if (geteuid() != 0) {
@@ -187,8 +190,9 @@ int main() {
     RoutingTable my_table;
     std::set<std::string> known_neighbors;
     uint32_t seq_num = 0;
+    RueQueue queue("pending_messages.rue");
 
-    std::thread net_thread(network_loop, std::ref(net), std::ref(my_table), std::ref(known_neighbors), std::ref(seq_num));
+    std::thread net_thread(network_loop, std::ref(net), std::ref(my_table), std::ref(known_neighbors), std::ref(seq_num), std::ref(queue));
 
     print_usage();
 
@@ -249,6 +253,9 @@ int main() {
             }
             std::cout << "-------------------------\n";
         }
+        else if (command == "queue") {
+            queue.print_status();
+        }
         else if (command == "send") {
             std::string target_mac;
             iss >> target_mac;
@@ -261,21 +268,19 @@ int main() {
                 continue;
             }
 
-            {
-                std::lock_guard<std::mutex> lock(net_mutex);
-                if (known_neighbors.find(target_mac) == known_neighbors.end()) {
-                    // Check if it's in routing table (multi-hop)
-                    uint8_t dest[6];
-                    string_to_mac(target_mac, dest);
-                    if (!my_table.find_next_hop(dest)) {
-                        std::cout << "Error: " << target_mac << " not reachable. Use 'list' or 'table'.\n";
-                        continue;
-                    }
-                }
-            }
-
             uint8_t dest_mac[6];
             string_to_mac(target_mac, dest_mac);
+
+            // Check if target is reachable
+            bool reachable = false;
+            {
+                std::lock_guard<std::mutex> lock(net_mutex);
+                if (known_neighbors.find(target_mac) != known_neighbors.end()) {
+                    reachable = true;
+                } else if (my_table.find_next_hop(dest_mac)) {
+                    reachable = true;
+                }
+            }
 
             Packet msg_pkt;
             msg_pkt.init(PacketType::DATA, my_mac, dest_mac, seq_num++);
@@ -285,14 +290,20 @@ int main() {
             std::memcpy(msg_pkt.payload, message.c_str(), len);
             msg_pkt.header.payload_len = len;
 
-            {
-                std::lock_guard<std::mutex> lock(net_mutex);
-                net.send_packet(msg_pkt, dest_mac);
+            if (reachable) {
+                {
+                    std::lock_guard<std::mutex> lock(net_mutex);
+                    net.send_packet(msg_pkt, dest_mac);
+                }
+                std::cout << "Sent to " << target_mac << ": \"" << message << "\"\n";
+            } else {
+                queue.enqueue(dest_mac, msg_pkt.payload, msg_pkt.header.payload_len);
+                std::cout << "Target " << target_mac << " offline. Message saved to .rue queue.\n";
+                std::cout << "Will auto-deliver when neighbor returns.\n";
             }
-            std::cout << "Sent to " << target_mac << ": \"" << message << "\"\n";
         }
         else if (!command.empty()) {
-            std::cout << "Unknown command. Use: send, list, table, status, receive, quit.\n";
+            std::cout << "Unknown command. Use: send, list, table, status, receive, queue, quit.\n";
         }
     }
 
