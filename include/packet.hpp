@@ -11,11 +11,10 @@ namespace araba {
 
 // Packet Types
 enum class PacketType : uint8_t {
-    DISCOVERY = 0x01, // "Hello, I am here"
-    ROUTE_REQUEST = 0x02, // "How do I get to X?"
-    ROUTE_REPLY = 0x03, // "I have a path to X"
-    DATA = 0x04, // The actual message
-    ACK = 0x05 // "I got it"
+    DISCOVERY = 0x01,    // "Hello, I am here"
+    ROUTE_ADV = 0x02,    // "Here is who I know"
+    DATA = 0x03,         // Actual message
+    ACK = 0x04           // "I got it"
 };
 
 // Configuration
