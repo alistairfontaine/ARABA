@@ -5,6 +5,7 @@
 #include <string>
 #include <iostream>
 #include <cstdint>
+#include <ctime>
 #include "packet.hpp"
 
 namespace araba {
@@ -30,9 +31,14 @@ public:
     // Add or update a route
     void add_route(const uint8_t dest[6], const uint8_t next_hop[6], uint8_t hops);
 
-    // Get the next hop for a specific destination
-    // Returns nullptr if no route found
+    // Get the route entry directly (legacy)
     const RouteEntry* get_route(const uint8_t dest[6]);
+
+    // Find the next hop for a specific destination (NEW)
+    const RouteEntry* find_next_hop(const uint8_t dest[6]);
+
+    // Check if a timestamp is stale (NEW)
+    bool is_stale(uint64_t timestamp) const;
 
     // Print the table (for debugging)
     void print_table() const;
@@ -49,14 +55,15 @@ class Router {
 public:
     Router();
 
-    // Set the router's own MAC address
-    void set_mac(const uint8_t mac[6]);
-
     // Process an incoming packet
+    // Returns true if the packet was forwarded, false if it was dropped or handled locally
     bool process_packet(const Packet& packet, RoutingTable& table);
 
     // Simulate receiving a "Hello" packet from a neighbor
     void receive_hello(const uint8_t neighbor_mac[6]);
+
+    // Set the router's own MAC address
+    void set_mac(const uint8_t mac[6]);
 
 private:
     uint8_t my_mac[6]; // Our own MAC address

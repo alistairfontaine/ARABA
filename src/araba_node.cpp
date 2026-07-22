@@ -7,6 +7,7 @@
 #include <algorithm>
 #include "network.hpp"
 #include "packet.hpp"
+#include "routing.hpp"
 
 using namespace araba;
 
@@ -20,17 +21,16 @@ struct Neighbor {
 };
 
 int main() {
-    std::cout << "=== ARABA Node v0.1 ===" << std::endl;
-    std::cout << "Starting Discovery Loop..." << std::endl;
+    std::cout << "=== ARABA Node v0.2 (Router) ===" << std::endl;
+    std::cout << "Starting Mesh Routing Engine..." << std::endl;
 
-    // Check root
     if (geteuid() != 0) {
         std::cerr << "Error: Run with sudo." << std::endl;
         return 1;
     }
 
     NetworkInterface net;
-    std::string iface = "wlo1"; // Default, can be passed as arg later
+    std::string iface = "wlo1";
 
     if (!net.open(iface)) {
         std::cerr << "Failed to open interface." << std::endl;
@@ -41,16 +41,17 @@ int main() {
     net.get_local_mac(my_mac);
     std::cout << "I am: " << mac_to_string(my_mac) << std::endl;
 
-    std::set<std::string> known_neighbors;
+    RoutingTable my_table;
     uint32_t seq_num = 0;
+    std::set<std::string> known_neighbors;
 
-    std::cout << "\n--- Starting Discovery ---" << std::endl;
-    std::cout << "Broadcasting 'Hello' every 2 seconds. Listening for neighbors..." << std::endl;
+    std::cout << "\n--- Mesh Routing Started ---" << std::endl;
+    std::cout << "Broadcasting 'Hello' and listening for traffic..." << std::endl;
 
     while (true) {
-        // 1. Broadcast Hello
+        // 1. Broadcast Hello (Discovery)
         Packet hello_pkt;
-        uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        uint8_t broadcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
         hello_pkt.init(PacketType::DISCOVERY, my_mac, broadcast, seq_num++);
 
         const char* msg = "ARABA Hello!";
@@ -58,45 +59,60 @@ int main() {
         hello_pkt.header.payload_len = std::strlen(msg);
 
         net.send_packet(hello_pkt, broadcast);
-        std::cout << "[Sent] Hello (Seq: " << seq_num-1 << ")" << std::endl;
 
-        // 2. Listen for 2 seconds (non-blocking loop)
-        for (int i = 0; i < 20; ++i) { // 20 * 100ms = 2 seconds
-            Packet received;
+        // 2. Listen for packets
+        Packet received;
+        // We listen for a bit longer to catch more traffic
+        for (int i = 0; i < 10; ++i) { // 1 second
             if (net.receive_packet(received)) {
-                // Ignore if it's our own packet (loopback)
+                // Skip our own packets (loopback)
                 if (std::memcmp(received.header.source, my_mac, 6) == 0) {
                     continue;
                 }
 
-                // Process Discovery Packet
-                if (received.header.type == PacketType::DISCOVERY) {
-                    std::string neighbor_mac = mac_to_string(received.header.source);
+                // --- LOGIC: UPDATE ROUTING TABLE ---
+                // If we see a packet from a neighbor, we know they exist.
+                // We add a route to them (1 hop away).
+                std::string src_mac = mac_to_string(received.header.source);
+                if (known_neighbors.find(src_mac) == known_neighbors.end()) {
+                    std::cout << "\n>>> NEW NEIGHBOR: " << src_mac << " <<<" << std::endl;
+                    known_neighbors.insert(src_mac);
+                    // Add route: Destination = Neighbor, Next Hop = Neighbor, Hops = 1
+                    my_table.add_route(received.header.source, received.header.source, 1);
+                }
 
-                    if (known_neighbors.find(neighbor_mac) == known_neighbors.end()) {
-                        // New Neighbor!
-                        std::cout << "\n>>> NEW NEIGHBOR DETECTED: " << neighbor_mac << " <<<" << std::endl;
-                        if (received.header.payload_len > 0) {
-                            std::cout << "    Message: " << (char*)received.payload << std::endl;
+                // --- LOGIC: FORWARD PACKETS ---
+                // If the packet is NOT for us, and we have a route, forward it!
+                if (std::memcmp(received.header.dest, my_mac, 6) != 0) {
+                    // We are not the destination. Check if we know how to get there.
+                    const RouteEntry* route = my_table.find_next_hop(received.header.dest);
+
+                    if (route) {
+                        // We have a path! Forward it.
+                        if (received.header.ttl > 1) {
+                            Packet forward_pkt = received;
+                            forward_pkt.header.ttl--; // Decrement TTL
+                            std::cout << "[FORWARD] Sending to " << mac_to_string(route->next_hop)
+                                      << " (Dest: " << mac_to_string(received.header.dest) << ")" << std::endl;
+                            net.send_packet(forward_pkt, route->next_hop);
+                        } else {
+                            std::cout << "[DROP] TTL expired for " << mac_to_string(received.header.dest) << std::endl;
                         }
-                        known_neighbors.insert(neighbor_mac);
                     } else {
-                        // Already known, just update "last seen" (logic could go here)
-                        // std::cout << "[Ping] Heard from " << neighbor_mac << " again." << std::endl;
+                        // No route? In a real AODV, we would broadcast a Route Request (RREQ).
+                        // For now, we just drop it or log it.
+                        // std::cout << "[RREQ] No route to " << mac_to_string(received.header.dest) << ". Broadcasting RREQ..." << std::endl;
                     }
                 }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
-        // Print current list
-        if (!known_neighbors.empty()) {
-            std::cout << "\n--- Current Neighbors (" << known_neighbors.size() << ") ---" << std::endl;
-            for (const auto& n : known_neighbors) {
-                std::cout << "  - " << n << std::endl;
-            }
-            std::cout << "--------------------------------" << std::endl;
-        }
+        // Print status
+        std::cout << "\n--- Status (Seq: " << seq_num-1 << ") ---" << std::endl;
+        std::cout << "Neighbors: " << known_neighbors.size() << std::endl;
+        my_table.print_table();
+        std::cout << "--------------------------\n" << std::endl;
     }
 
     net.close();

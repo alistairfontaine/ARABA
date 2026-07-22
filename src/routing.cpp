@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <cstring>
 #include <ctime>
+#include <iostream>
 
 namespace araba {
 
@@ -55,60 +56,25 @@ void RoutingTable::print_table() const {
     std::cout << "=====================\n" << std::endl;
 }
 
-// --- Router Logic ---
+// --- NEW FUNCTIONS ---
 
-Router::Router() {
-    std::memset(my_mac, 0, 6); // Initialize as 00:00:00... (will be set later)
-    sequence_number = 0;
-}
-    void Router::set_mac(const uint8_t mac[6]) {
-    std::memcpy(my_mac, mac, 6);
-}
-
-void Router::receive_hello(const uint8_t neighbor_mac[6]) {
-    // In a real AODV, we'd check TTL and update distances.
-    // Here, we just assume the neighbor is 1 hop away.
-    RoutingTable temp_table;
-    // We would normally update the table with the neighbor being 1 hop away
-    // For now, let's just log it
-    std::cout << "[Router] Hello received from: " << mac_to_string(neighbor_mac) << std::endl;
-}
-
-bool Router::process_packet(const Packet& packet, RoutingTable& table) {
-    if (!packet.isValid()) {
-        std::cout << "[Router] Invalid packet dropped." << std::endl;
-        return false;
+const RouteEntry* RoutingTable::find_next_hop(const uint8_t dest[6]) {
+    std::string key = mac_to_key(dest);
+    auto it = table.find(key);
+    if (it != table.end() && it->second.is_valid && !is_stale(it->second.last_updated)) {
+        return &(it->second);
     }
-
-    // Check if we are the destination
-    if (std::memcmp(packet.header.dest, my_mac, 6) == 0) {
-        std::cout << "[Router] Packet received for ME! Processing data..." << std::endl;
-        // In a real app, we would decrypt and process the payload here.
-        return false; // Stop forwarding, we are the end
-    }
-
-    // We are not the destination. Check routing table.
-    const RouteEntry* route = table.get_route(packet.header.dest);
-
-    if (route) {
-        // We have a path! Forward it.
-        if (packet.header.ttl > 1) {
-            Packet forward_pkt = packet;
-            forward_pkt.header.ttl--; // Decrement TTL
-            std::cout << "[Router] Forwarding packet to " << mac_to_string(route->next_hop)
-                      << " (TTL: " << (int)forward_pkt.header.ttl << ")" << std::endl;
-            // In a real app, we would send 'forward_pkt' to 'route->next_hop'
-            return true;
-        } else {
-            std::cout << "[Router] TTL expired. Packet dropped." << std::endl;
-            return false;
-        }
-    } else {
-        // No route found! We need to broadcast a Route Request (RREQ).
-        std::cout << "[Router] No route to destination. Broadcasting RREQ..." << std::endl;
-        // Logic to create and send RREQ would go here.
-        return false;
-    }
+    return nullptr;
 }
+
+bool RoutingTable::is_stale(uint64_t timestamp) const {
+    uint64_t now = std::time(nullptr);
+    // If no update in 30 seconds, consider it stale
+    return (now - timestamp) > 30;
+}
+
+// --- Router Logic (if needed later) ---
+// We can keep this empty or add it later if we move Router logic here.
+// For now, we just need the RoutingTable functions.
 
 } // namespace araba
