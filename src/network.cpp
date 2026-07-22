@@ -93,7 +93,7 @@ bool NetworkInterface::send_packet(const Packet& packet, const uint8_t dest_mac[
         std::cerr << "[Network] Send failed: " << strerror(errno) << std::endl;
         return false;
     }
-    std::cout << "[Network] Sent " << sent << " bytes." << std::endl;
+    // Packet sent silently
     return true;
 }
 

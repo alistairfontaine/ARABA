@@ -29,7 +29,7 @@ void RoutingTable::add_route(const uint8_t dest[6], const uint8_t next_hop[6], u
         entry.hops = hops;
         entry.last_updated = std::time(nullptr);
         entry.is_valid = true;
-        std::cout << "[Routing] Updated route to " << key << " (Hops: " << (int)hops << ")" << std::endl;
+        // Route updated silently (logged externally if needed)
     }
 }
 
