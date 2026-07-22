@@ -4,7 +4,7 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -I include
 TARGET = araba_node
-SRCS = src/araba_node.cpp src/network.cpp src/routing.cpp src/persistence.cpp src/crypto.cpp src/fragment.cpp
+SRCS = src/araba_node.cpp src/network.cpp src/routing.cpp src/persistence.cpp src/crypto.cpp src/fragment.cpp src/config.cpp
 OBJS = $(SRCS:.cpp=.o)
 
 .PHONY: all clean run test-crypto
@@ -18,7 +18,7 @@ $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJS) $(TARGET) araba.log pending_messages.rue test_crypto
+	rm -f $(OBJS) $(TARGET) araba.log pending_messages.rue test_crypto araba.conf
 
 run: $(TARGET)
 	sudo ./$(TARGET)

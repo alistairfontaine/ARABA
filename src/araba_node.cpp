@@ -20,6 +20,7 @@
 #include "persistence.hpp"
 #include "crypto.hpp"
 #include "fragment.hpp"
+#include "config.hpp"
 
 using namespace araba;
 
@@ -29,9 +30,10 @@ bool running = true;
 uint8_t base_key[AES_KEY_SIZE];
 std::map<std::string, std::unique_ptr<AES256>> pair_ciphers;
 FragmentManager frag_mgr;
+NodeConfig g_config;
 
 void log_event(const std::string& msg) {
-    std::ofstream log("araba.log", std::ios::app);
+    std::ofstream log(g_config.log_file, std::ios::app);
     auto t = std::time(nullptr);
     auto tm = *std::localtime(&t);
     log << "[" << tm.tm_hour << ":" << tm.tm_min << ":" << tm.tm_sec << "] " << msg << "\n";
@@ -161,6 +163,7 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
     while (running) {
         Packet hello_pkt;
         hello_pkt.init(PacketType::DISCOVERY, my_mac, broadcast, seq_num++);
+        hello_pkt.header.ttl = g_config.discovery_ttl;
         const char* msg = "ARABA Hello!";
         std::memcpy(hello_pkt.payload, msg, std::strlen(msg));
         hello_pkt.header.payload_len = std::strlen(msg);
@@ -215,28 +218,65 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
                 }
 
                 if (received.header.type == PacketType::DATA) {
-                    AES256* aes = get_pair_cipher(received.header.source, my_mac);
-
-                    uint8_t decrypted[1024];
-                    size_t dec_len = decrypt_payload(received.payload, received.header.payload_len,
-                                                     decrypted, 1024, aes);
-
-                    if (dec_len == 0) {
-                        log_event("Failed to decrypt DATA from " + src_mac);
-                        continue;
+                    // Check if this is a single packet or a fragment
+                    bool is_fragment = false;
+                    if (received.header.payload_len >= sizeof(FragHeader)) {
+                        FragHeader fh;
+                        std::memcpy(&fh, received.payload, sizeof(FragHeader));
+                        is_fragment = (fh.frag_total > 1);
                     }
 
-                    if (std::memcmp(received.header.dest, my_mac, 6) != 0) {
-                        const RouteEntry* route = table.find_next_hop(received.header.dest);
-                        if (route && received.header.ttl > 1) {
-                            Packet fwd = received;
-                            fwd.header.ttl--;
-                            net.send_packet(fwd, route->next_hop);
-                            log_event("FORWARDED DATA to " + mac_to_string(route->next_hop));
+                    if (is_fragment) {
+                        // Reassemble encrypted fragments first
+                        uint8_t reassembled_enc[2048];
+                        size_t reassembled_enc_len = 0;
+                        bool complete = frag_mgr.reassemble_packet(received, reassembled_enc, 2048, reassembled_enc_len);
+
+                        if (!complete) {
+                            // Waiting for more fragments
+                            continue;
+                        }
+
+                        // Now decrypt the full reassembled ciphertext
+                        AES256* aes = get_pair_cipher(received.header.source, my_mac);
+                        uint8_t decrypted[2048];
+                        size_t dec_len = decrypt_payload(reassembled_enc, reassembled_enc_len, decrypted, 2048, aes);
+
+                        if (dec_len == 0) {
+                            log_event("Failed to decrypt reassembled DATA from " + src_mac);
+                            continue;
+                        }
+
+                        if (std::memcmp(received.header.dest, my_mac, 6) != 0) {
+                            log_event("DROPPED fragmented DATA — forwarding not yet supported");
+                        } else {
+                            std::string msg((char*)decrypted, dec_len);
+                            log_event("MESSAGE RECEIVED from " + src_mac + ": " + msg);
                         }
                     } else {
-                        std::string msg((char*)decrypted, dec_len);
-                        log_event("MESSAGE RECEIVED from " + src_mac + ": " + msg);
+                        // Single packet (no fragmentation) — decrypt directly
+                        AES256* aes = get_pair_cipher(received.header.source, my_mac);
+                        uint8_t decrypted[1024];
+                        size_t dec_len = decrypt_payload(received.payload, received.header.payload_len,
+                                                         decrypted, 1024, aes);
+
+                        if (dec_len == 0) {
+                            log_event("Failed to decrypt DATA from " + src_mac);
+                            continue;
+                        }
+
+                        if (std::memcmp(received.header.dest, my_mac, 6) != 0) {
+                            const RouteEntry* route = table.find_next_hop(received.header.dest);
+                            if (route && received.header.ttl > 1) {
+                                Packet fwd = received;
+                                fwd.header.ttl--;
+                                net.send_packet(fwd, route->next_hop);
+                                log_event("FORWARDED DATA to " + mac_to_string(route->next_hop));
+                            }
+                        } else {
+                            std::string msg((char*)decrypted, dec_len);
+                            log_event("MESSAGE RECEIVED from " + src_mac + ": " + msg);
+                        }
                     }
                 }
             }
@@ -245,7 +285,7 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
 
         static int cleanup_counter = 0;
         if (++cleanup_counter >= 100) {
-            frag_mgr.cleanup_stale();
+            frag_mgr.cleanup_stale(g_config.fragment_timeout_sec);
             cleanup_counter = 0;
         }
     }
@@ -253,7 +293,7 @@ void network_loop(NetworkInterface& net, RoutingTable& table, std::set<std::stri
 }
 
 int main(int argc, char* argv[]) {
-    std::cout << "=== ARABA Node v0.8 (Dynamic Keys + Fragments) ===\n"
+    std::cout << "=== ARABA Node v0.9 (Config + Dynamic Keys + Fragments) ===\n"
               << "Starting Mesh Network...\n" << std::endl;
 
     if (geteuid() != 0) {
@@ -261,14 +301,25 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    derive_key("ARABA_MESH_SECRET_2026", base_key);
+    // Load or create config
+    std::string config_path = "araba.conf";
+    if (argc > 1) config_path = argv[1];
+
+    if (!load_config(config_path, g_config)) {
+        std::cout << "[Config] No config found. Creating default " << config_path << "\n";
+        save_default_config(config_path);
+        load_config(config_path, g_config);
+    }
+    std::cout << "[Config] Loaded from " << config_path << "\n";
+
+    derive_key(g_config.passphrase.c_str(), base_key);
     std::cout << "[Crypto] Base key derived. Per-pair encryption active.\n" << std::endl;
 
     NetworkInterface net;
 
-    if (argc > 1) {
-        if (!net.open(argv[1])) {
-            std::cerr << "Failed to open " << argv[1] << ".\n";
+    if (!g_config.interface.empty()) {
+        if (!net.open(g_config.interface)) {
+            std::cerr << "Failed to open " << g_config.interface << ".\n";
             return 1;
         }
     } else {
@@ -285,7 +336,7 @@ int main(int argc, char* argv[]) {
     RoutingTable my_table;
     std::set<std::string> known_neighbors;
     uint32_t seq_num = 0;
-    RueQueue queue("pending_messages.rue");
+    RueQueue queue(g_config.queue_file);
 
     std::thread net_thread(network_loop, std::ref(net), std::ref(my_table), std::ref(known_neighbors),
                           std::ref(seq_num), std::ref(queue));
@@ -320,7 +371,7 @@ int main(int argc, char* argv[]) {
         }
         else if (command == "status") {
             std::cout << "\n--- Recent Log Events ---\n";
-            std::ifstream log("araba.log");
+            std::ifstream log(g_config.log_file);
             std::string line;
             std::vector<std::string> lines;
             while (std::getline(log, line)) lines.push_back(line);
@@ -332,7 +383,7 @@ int main(int argc, char* argv[]) {
         }
         else if (command == "receive" || command == "recv") {
             std::cout << "\n--- Checking for messages ---\n";
-            std::ifstream log("araba.log");
+            std::ifstream log(g_config.log_file);
             std::string line;
             std::vector<std::string> lines;
             while (std::getline(log, line)) {
@@ -415,6 +466,6 @@ int main(int argc, char* argv[]) {
     running = false;
     if (net_thread.joinable()) net_thread.join();
     net.close();
-    std::cout << "\nARABA Node stopped. Log saved to araba.log\n";
+    std::cout << "\nARABA Node stopped. Log saved to " << g_config.log_file << "\n";
     return 0;
 }

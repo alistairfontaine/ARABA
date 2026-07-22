@@ -14,13 +14,22 @@ When the grid fails, the internet dies. Starlink requires hardware and satellite
 
 ---
 
+# ARABA — Offline-First Encrypted Mesh Network
+
+&gt; *"For the day the towers go dark."*
+
+ARABA is a zero-dependency, offline-first mesh networking protocol built in pure C++17. It turns any Linux device with a Wi-Fi adapter into an encrypted message relay node — no internet, no cell towers, no infrastructure required.
+
 ## Features
 
 - 🔒 **AES-256 Encryption** — Custom implementation, zero external dependencies
+- 🔑 **Per-Pair Dynamic Keys** — Each node pair uses a unique derived key
 - 📡 **Raw Socket Mesh** — Direct device-to-device communication over Wi-Fi
 - 🧠 **AODV-Lite Routing** — Automatic route discovery and multi-hop forwarding
 - 💾 **Store & Forward** — Messages survive reboots and auto-deliver when neighbors return (`.rue` format)
+- ✂️ **Message Fragmentation** — Large messages split into multiple packets, reassembled on receive
 - 🖥️ **Interactive CLI** — Clean shell with background network thread
+- ⚙️ **Config File** — `araba.conf` for passphrase, interface, and tuning
 - ⚡ **Zero Bloat** — No OpenSSL, no Boost, no external libraries
 - **Zero Dependencies**: Pure C++17. No Boost, No OpenSSL (crypto is custom).
 - **Delay-Tolerant**: Stores and forwards messages even if nodes are offline.
@@ -62,6 +71,12 @@ g++ -std=c++17 -Wall -Wextra -I include -o araba_node src/araba_node.cpp src/net
 bash
 
 ./araba_node --interface wlan0 --mode ad-hoc
+
+### Option 1: Makefile
+```bash
+cd /media/mr-fontaine/R/RECOVERY/Coding/ARABA
+make
+sudo ./araba_node
 
 ---
 
