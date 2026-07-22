@@ -1,26 +1,35 @@
-# ARABA Project Roadmap
+# ARABA Roadmap
 
-## Phase 1: The Core (Current)
-- [x] Project Structure & Licensing
-- [ ] **Packet Protocol Design**: Define the binary header, types, and checksums.
-- [ ] **Serialization**: Code to pack/unpack structs to binary buffers.
-- [ ] **Basic Unit Tests**: Verify packet integrity without network.
+## Completed
 
-## Phase 2: The Network
-- [ ] **Discovery**: Implement "Hello" broadcasting to find neighbors.
-- [ ] **Routing Table**: Build the AODV (Ad-hoc On-Demand Distance Vector) logic.
-- [ ] **Packet Forwarding**: Logic to pass a message from Node A -> B -> C.
+| Phase | Feature | Status |
+|-------|---------|--------|
+| 1 | Packet Protocol (binary headers, validation) | Done |
+| 2 | Routing Engine (RoutingTable, RouteEntry) | Done |
+| 3 | Raw Sockets (AF_PACKET, ETH_P_ALL) | Done |
+| 4 | Clean Parse (skip 14-byte Ethernet header) | Done |
+| 5 | Discovery Loop (broadcast DISCOVERY) | Done |
+| 6 | Routing Logic (forward, TTL management) | Done |
+| 7 | Interactive CLI (clean shell, no stdout spam) | Done |
+| 8 | Multi-Hop Logic (ROUTE_ADV propagation) | Done |
+| B | Store & Forward (.rue persistence queue) | Done |
+| C | AES-256 Encryption (custom implementation) | Done |
+| D | Crypto Integration (encrypt send, decrypt receive) | Done |
+| F | Documentation & Polish (README, Makefile, docs) | Done |
 
-## Phase 3: Reliability
-- [ ] **Store & Forward**: Save packets to disk if the next hop is unreachable.
-- [ ] **Encryption**: Custom AES-256 implementation for end-to-end security.
-- [ ] **Concurrency**: Multi-threaded packet processing.
+## In Progress
 
-## Phase 4: The Interface
-- [ ] **CLI Tool**: `araba send <message> <target_node>`
-- [ ] **GUI (Optional)**: A simple Qt or terminal-based map of neighbors.
+| Phase | Feature | Blocker |
+|-------|---------|---------|
+| E | Real-World Multi-Node Test | Needs second device |
 
-## Phase 5: Deployment
-- [ ] **Cross-Platform**: Compile for Linux, Windows, macOS.
-- [ ] **Documentation**: Full API and user guide.
-- [ ] **Open Source Release**: Public GitHub launch.
+## Future
+
+| Phase | Feature | Notes |
+|-------|---------|-------|
+| G | Cross-Platform Build | Makefile done. CMake, Windows, macOS next |
+| H | Dynamic Key Exchange | Replace hardcoded shared secret |
+| I | Message Fragmentation | For payloads &gt; 496 bytes |
+| J | GPS Integration | Attach coordinates to messages |
+| K | Web Interface | HTTP server for non-CLI users |
+| L | Android Port | Requires rooted device for raw sockets |

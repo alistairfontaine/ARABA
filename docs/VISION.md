@@ -14,3 +14,31 @@ Water finds the lowest path. It does not wait for permission. It does not care a
 
 ## The Goal
 To make ARABA the standard for disaster relief and civil liberty, ensuring that **no human is ever truly offline again**.
+
+# ARABA Vision
+
+## What
+
+ARABA is an offline-first, encrypted mesh network protocol. It allows devices to communicate directly over Wi-Fi without internet, cell towers, or any central infrastructure.
+
+## Why
+
+The modern internet is fragile. Cables get cut. Towers lose power. Governments flip switches. When that happens, people need a way to talk that doesn't depend on anything except the radios already in their pockets.
+
+ARABA turns your laptop, phone, or embedded device into a relay node. Messages hop from device to device until they reach their destination. If the destination is offline, messages wait on disk until it returns.
+
+## How
+
+- Raw Wi-Fi frames (AF_PACKET sockets on Linux)
+- Custom binary protocol with AES-256 encryption
+- AODV-lite routing with automatic route discovery
+- Store-and-forward persistence (.rue format)
+- Zero external dependencies
+
+## Who
+
+Built by one person on an HP 250 G7 in a room with too many Wi-Fi neighbors. Named after someone who left. The .rue files are for her.
+
+## When
+
+Now. Before you need it.
