@@ -109,24 +109,33 @@ bool NetworkInterface::receive_packet(Packet& packet) {
         return false;
     }
 
-    // Check if the packet is large enough
-    if (bytes < sizeof(PacketHeader)) {
+    // Ethernet Header is 14 bytes: 6 (Dest) + 6 (Src) + 2 (Type)
+    // We must skip these to find our custom Packet header
+    const size_t ETHERNET_HEADER_SIZE = 14;
+
+    // Check if the packet is large enough to contain Ethernet Header + Our Packet
+    if (bytes < (ssize_t)(ETHERNET_HEADER_SIZE + sizeof(PacketHeader))) {
         return false;
     }
 
+    // Calculate the offset to our custom packet
+    size_t packet_offset = ETHERNET_HEADER_SIZE;
+
     // Copy header
-    std::memcpy(&packet.header, buffer, sizeof(PacketHeader));
+    std::memcpy(&packet.header, buffer + packet_offset, sizeof(PacketHeader));
+
+    // Check payload length sanity
+    if (packet.header.payload_len > MAX_PAYLOAD_SIZE) {
+        packet.header.payload_len = 0; // Ignore corrupted packets
+        return false;
+    }
 
     // Copy payload (if any)
     if (packet.header.payload_len > 0) {
-        size_t payload_offset = sizeof(PacketHeader);
-        if (bytes >= payload_offset + packet.header.payload_len) {
-            std::memcpy(packet.payload, buffer + payload_offset, packet.header.payload_len);
+        size_t total_needed = packet_offset + sizeof(PacketHeader) + packet.header.payload_len;
+        if (bytes >= (ssize_t)total_needed) {
+            std::memcpy(packet.payload, buffer + packet_offset + sizeof(PacketHeader), packet.header.payload_len);
         }
-    }
-    // Ensure payload length doesn't exceed MAX_PAYLOAD_SIZE
-    if (packet.header.payload_len > MAX_PAYLOAD_SIZE) {
-        packet.header.payload_len = MAX_PAYLOAD_SIZE;
     }
 
     return true;
