@@ -9,6 +9,61 @@ ARABA is a zero-dependency, offline-first mesh networking protocol built in pure
 
 ---
 
+# ARABA (v1.0.0 Crisis-Ready Mesh Network)
+
+An advanced, high-performance, completely dependency-free Offline-First Mesh Network Node and Cryptographic Messaging Engine engineered from bedrock principles in pure C++17.
+
+Designed specifically for communication finality during total infrastructure collapse, regional network blackouts, or tactical isolation scenarios, ARABA operates directly over bare-metal wireless link layers (`AF_PACKET` / `SOCK_RAW`) without relying on cellular towers, internet gateways, DNS tracking, or central routing server arrays.
+
+---
+
+## 🔬 Subsystem Architectural Strengths
+
+*   **Sovereign Link-Layer Ingress:** Binds natively to raw Wi-Fi interfaces (such as `wlo1`), parsing custom link-layer Ethernet frames bypassing standard network stack overhead.
+*   **Per-Pair Dynamic Encryption:** Custom dependency-free AES-256-CBC cryptographic layout where distinct pairs derive unique cryptographic keys based on mutual hardware MAC footprints combined with a base master secret passphrase.
+*   **Volatile Byte Segmentation:** Automatically splits payloads exceeding 480 bytes into isolated chunks, handles message transmission queues, tracks validation ACKs, and dynamically reassembles packet buffers on receipt.
+*   **Store-and-Forward Persistence:** Implements our custom `.rue` data persistence engine to automatically cache outgoing payloads to disk when a target node goes out of range, auto-delivering packets the exact moment the destination beacon drops back online.
+*   **Topography Learning:** Continuous background discovery loops (`DISCOVERY`) and route propagation alerts (`ROUTE_ADV`) running an in-memory AODV-lite matrix to calculate multi-hop message forwarding lanes.
+
+---
+
+## 🛠️ Verification and Compilation Guide
+
+### 📦 1. Clone the Complete Workspace Repository
+```bash
+git clone https://github.com
+cd ARABA
+```
+
+### 🔨 2. Execute the Automated Makefile Build Script
+```bash
+make clean
+make
+```
+
+### 🕹️ 3. Launch the Root Daemon CLI Console
+```bash
+sudo ./araba_node
+```
+
+---
+
+## 💻 Native Interactive Shell Commands
+
+*   `send <mac_address> <message>` - Encrypts, fragments, and dispatches text payloads across the mesh lanes.
+*   `list`                         - Displays all active direct hardware nodes currently within RF radio sight boundaries.
+*   `table`                        - Prints the parsed multi-hop AODV routing layout matrix tracking hop metrics.
+*   `status`                       - Outputs a trace read block of the last 10 silent background event logs.
+*   `receive`                      - Displays the secure ledger of decrypted text messages explicitly received by this node.
+*   `queue`                        - Inspects the persistent offline `.rue` message delivery cache layers.
+*   `quit / exit`                  - Safely shuts down running threads, unbinds sockets, and drops the node offline.
+
+---
+
+## 📜 Sovereign Open-Source License
+ARABA is an open-source, civilian defense communication protocol distributed under the terms of the official MIT License guidelines.
+
+
 ## The Vision
 When the grid fails, the internet dies. Starlink requires hardware and satellites. ARABA requires **nothing but code**. It is the vehicle for data in the darkest times.
 
