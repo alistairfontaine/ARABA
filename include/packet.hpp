@@ -73,14 +73,15 @@ inline std::string mac_to_string(const uint8_t mac[6]) {
 
 // Utility: String to MAC
 inline void string_to_mac(const std::string& mac_str, uint8_t mac_out[6]) {
+    std::memset(mac_out, 0, 6);
     std::istringstream iss(mac_str);
     char sep;
     int temp_val; // Temporary variable to hold the integer
     for (int i = 0; i < 6; ++i) {
-        if (i == 2 || i == 4 || i == 5) { // Skip colons
+        if (i > 0) {          // Every byte after the first is preceded by a ':' separator
             iss >> sep;
         }
-        iss >> std::hex >> temp_val; // Read into temp
+        if (!(iss >> std::hex >> temp_val)) break; // Stop cleanly on malformed input
         mac_out[i] = static_cast<uint8_t>(temp_val); // Cast and store
     }
 }

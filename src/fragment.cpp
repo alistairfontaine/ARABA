@@ -76,16 +76,27 @@ bool FragmentManager::reassemble_packet(
 
     if (partial.fragments.size() != fh.frag_total) return false;
 
-    if (fh.total_len > max_out) return false;
+    if (fh.total_len > max_out) {
+        // Declared size does not fit the caller's buffer — drop the message.
+        partials.erase(fh.msg_id);
+        return false;
+    }
 
+    // Reassemble, bounding every copy by both the caller's buffer and the
+    // declared total length. A malicious or corrupt peer can advertise a small
+    // total_len while sending oversized fragments; copying raw fragment sizes
+    // would overflow out_buf. Clamp to fh.total_len.
     size_t offset = 0;
     for (uint8_t i = 0; i < fh.frag_total; ++i) {
         const auto& f = partial.fragments[i];
-        std::memcpy(out_buf + offset, f.data(), f.size());
-        offset += f.size();
+        if (offset >= fh.total_len) break;
+        size_t remaining = static_cast<size_t>(fh.total_len) - offset;
+        size_t copy_len = (f.size() < remaining) ? f.size() : remaining;
+        std::memcpy(out_buf + offset, f.data(), copy_len);
+        offset += copy_len;
     }
 
-    out_len = fh.total_len;
+    out_len = offset;
     partials.erase(fh.msg_id);
     return true;
 }
