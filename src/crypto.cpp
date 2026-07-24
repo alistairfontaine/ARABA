@@ -88,17 +88,11 @@ void AES256::key_expansion(const uint8_t key[AES_KEY_SIZE]) {
     uint8_t temp[4];
     int i = 0;
 
-    // Copy first 32 bytes (8 words) directly
+    // Copy the first 8 words (32 bytes) directly: word i = key bytes [4i .. 4i+3]
     while (i < 8) {
         for (int j = 0; j < 4; j++) {
-            round_keys[i][j * 4 + 0] = key[i * 4 + j];
+            round_keys[i][j] = key[i * 4 + j];
         }
-        // Store as column-major (standard AES)
-        uint8_t w0 = round_keys[i][0];
-        uint8_t w1 = round_keys[i][4];
-        uint8_t w2 = round_keys[i][8];
-        uint8_t w3 = round_keys[i][12];
-        round_keys[i][0] = w0; round_keys[i][1] = w1; round_keys[i][2] = w2; round_keys[i][3] = w3;
         i++;
     }
 
@@ -122,8 +116,10 @@ void AES256::key_expansion(const uint8_t key[AES_KEY_SIZE]) {
 }
 
 void AES256::add_round_key(uint8_t state[AES_BLOCK_SIZE], int round) {
-    for (int i = 0; i < AES_BLOCK_SIZE; i++) {
-        state[i] ^= round_keys[round][i];
+    for (int c = 0; c < 4; c++) {
+        for (int j = 0; j < 4; j++) {
+            state[j + 4 * c] ^= round_keys[4 * round + c][j];
+        }
     }
 }
 
@@ -165,24 +161,24 @@ void AES256::mix_columns(uint8_t state[AES_BLOCK_SIZE]) {
     for (int c = 0; c < 4; c++) {
         uint8_t a[4], b[4];
         for (int i = 0; i < 4; i++) {
-            a[i] = state[i * 4 + c];
-            b[i] = gmul(state[i * 4 + c], 2);
+            a[i] = state[i + 4 * c];
+            b[i] = gmul(state[i + 4 * c], 2);
         }
-        state[0 * 4 + c] = b[0] ^ gmul(a[1], 3) ^ a[2] ^ a[3];
-        state[1 * 4 + c] = a[0] ^ b[1] ^ gmul(a[2], 3) ^ a[3];
-        state[2 * 4 + c] = a[0] ^ a[1] ^ b[2] ^ gmul(a[3], 3);
-        state[3 * 4 + c] = gmul(a[0], 3) ^ a[1] ^ a[2] ^ b[3];
+        state[0 + 4 * c] = b[0] ^ gmul(a[1], 3) ^ a[2] ^ a[3];
+        state[1 + 4 * c] = a[0] ^ b[1] ^ gmul(a[2], 3) ^ a[3];
+        state[2 + 4 * c] = a[0] ^ a[1] ^ b[2] ^ gmul(a[3], 3);
+        state[3 + 4 * c] = gmul(a[0], 3) ^ a[1] ^ a[2] ^ b[3];
     }
 }
 
 void AES256::inv_mix_columns(uint8_t state[AES_BLOCK_SIZE]) {
     for (int c = 0; c < 4; c++) {
         uint8_t a[4];
-        for (int i = 0; i < 4; i++) a[i] = state[i * 4 + c];
-        state[0 * 4 + c] = gmul(a[0], 0x0e) ^ gmul(a[1], 0x0b) ^ gmul(a[2], 0x0d) ^ gmul(a[3], 0x09);
-        state[1 * 4 + c] = gmul(a[0], 0x09) ^ gmul(a[1], 0x0e) ^ gmul(a[2], 0x0b) ^ gmul(a[3], 0x0d);
-        state[2 * 4 + c] = gmul(a[0], 0x0d) ^ gmul(a[1], 0x09) ^ gmul(a[2], 0x0e) ^ gmul(a[3], 0x0b);
-        state[3 * 4 + c] = gmul(a[0], 0x0b) ^ gmul(a[1], 0x0d) ^ gmul(a[2], 0x09) ^ gmul(a[3], 0x0e);
+        for (int i = 0; i < 4; i++) a[i] = state[i + 4 * c];
+        state[0 + 4 * c] = gmul(a[0], 0x0e) ^ gmul(a[1], 0x0b) ^ gmul(a[2], 0x0d) ^ gmul(a[3], 0x09);
+        state[1 + 4 * c] = gmul(a[0], 0x09) ^ gmul(a[1], 0x0e) ^ gmul(a[2], 0x0b) ^ gmul(a[3], 0x0d);
+        state[2 + 4 * c] = gmul(a[0], 0x0d) ^ gmul(a[1], 0x09) ^ gmul(a[2], 0x0e) ^ gmul(a[3], 0x0b);
+        state[3 + 4 * c] = gmul(a[0], 0x0b) ^ gmul(a[1], 0x0d) ^ gmul(a[2], 0x09) ^ gmul(a[3], 0x0e);
     }
 }
 
