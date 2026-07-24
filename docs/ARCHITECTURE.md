@@ -1,5 +1,10 @@
 # ARABA Architecture Blueprint
 
+Version 2.0.0-dev (FIPS-197 Standard Compliance Upgrade)
+
+Breaking Protocol Modification: Upgraded the core cryptographic sub-layer to fully match standard FIPS-197 AES-256-CBC specifications.
+Interoperability: Ciphertext tracking arrays on the wire are entirely recalculated. Nodes running version 2.0.0+ cannot decode encrypted payloads broadcast by old legacy node arrays (v1.x), requiring full grid cluster alignment.
+
 ## Overview
 ARABA is a layered protocol stack implemented in pure C++.
 
