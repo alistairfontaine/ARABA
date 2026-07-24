@@ -1,9 +1,8 @@
 <img src="assets/logo.png" alt="ARABA" width="100%">
 
-# Version 2.0.0-dev (FIPS-197 Standard Compliance Upgrade)
-
-**Breaking Protocol Modification: Upgraded the core cryptographic sub-layer to fully match standard FIPS-197 AES-256-CBC specifications.**
-**Interoperability:** Ciphertext tracking arrays on the wire are entirely recalculated. Nodes running version 2.0.0+ cannot decode encrypted payloads broadcast by old legacy node arrays (v1.x), requiring full grid cluster alignment.
+### Version 2.0.0-dev (FIPS-197 Standard Compliance Upgrade)
+* **Protocol Breaking Modification:** Upgraded the core cryptographic sub-layer to fully match standard FIPS-197 AES-256-CBC specifications.
+* **Interoperability Notice:** Ciphertext tracking arrays on the wire are entirely recalculated. Nodes running version `2.0.0+` cannot decode encrypted payloads broadcast by old legacy node arrays (`v1.x`), requiring full grid cluster alignment.
 
 ---
 # ARABA — **The Offline-First Global Mesh Network**
